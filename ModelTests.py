@@ -25,55 +25,6 @@ generos = list(os.listdir(espectrogramas))
 # Orden alfabetico
 generos.sort()
 
-# Generacion de train, test y validation
-"""
-# Vaciar los directorios de train, test y validation
-for s in separacion:
-    for g in generos:
-        if os.path.isdir(f"{s}/{g}"):
-            shutil.rmtree(f"{s}/{g}")
-
-for g in generos:
-  # Dividir imagenes en train, test y validation
-  src_files = []
-  for file in glob.glob(f"{espectrogramas}/{g}/*.png", recursive=True):
-    src_files.append(file)
-  random.shuffle(src_files)
-  # Test files: 10%, Validation files: 10%, Train files: 80%
-  train_files, validation_files, test_files = np.split(src_files, [int(.8*len(src_files)), int(.9*len(src_files))])
-
-  for f in separacion:
-    if not os.path.isdir(f"{f}/{g}"):
-      os.mkdir(f"{f}/{g}")
-
-  for f in train_files:
-      if not os.path.isfile(f"{train_dir}/{g}/{os.path.basename(f)}"):
-        os.rename(f, f"{train_dir}/{g}/{os.path.basename(f)}")
-  for f in test_files:
-      if not os.path.isfile(f"{test_dir}/{g}/{os.path.basename(f)}"):
-        os.rename(f, f"{test_dir}/{g}/{os.path.basename(f)}")
-  for f in validation_files:
-      if not os.path.isfile(f"{validation_dir}/{g}/{os.path.basename(f)}"):
-        os.rename(f, f"{validation_dir}/{g}/{os.path.basename(f)}")
-"""
-# Crear el modelo
-
-train_dataset = tf.keras.preprocessing.image_dataset_from_directory(
-    train_dir,
-    labels='inferred',
-    label_mode='categorical',
-    batch_size=32,
-    image_size=(432, 288)
-)
-
-validation_dataset = tf.keras.preprocessing.image_dataset_from_directory(
-    validation_dir,
-    labels='inferred',
-    label_mode='categorical',
-    batch_size=32,
-    image_size=(432, 288)
-)
-
 test_dataset = tf.keras.preprocessing.image_dataset_from_directory(
     test_dir,
     labels='inferred',
@@ -93,7 +44,6 @@ test_dataset = tf.keras.preprocessing.image_dataset_from_directory(
 # Capa Densa: 256
 # Capa de salida: 12
 tf.keras.utils.get_custom_objects().clear()
-
 
 @tf.keras.utils.register_keras_serializable(package="MyLayers", name="Modelo")
 class Modelo(models.Model):
@@ -161,26 +111,81 @@ class Modelo(models.Model):
         x = self.output_layer(x)
         return x
 
-
 model = Modelo()
 
+# Cargar el modelo
+model = tf.keras.models.load_model('modelNewDataset.keras', custom_objects={'Modelo': Modelo})
 
-# Entrenamiento
-model.summary()
+# Metricas
 
-model.compile(optimizer=tf.keras.optimizers.SGD(learning_rate=0.0001, momentum=0.9, weight_decay=0.001, nesterov=True),
-                loss='categorical_crossentropy',
-                metrics=['accuracy']
-              )
+y_pred = np.array([])
+y_true = np.array([])
+for x, y in test_dataset:
+    y_pred = np.concatenate([y_pred, np.argmax(model.predict(x), axis=1)])
+    y_true = np.concatenate([y_true, np.argmax(y, axis=1)])
 
-log_dir = "logs/fit/L2_kernel_0.0001_Bigger_SGD_callback_decay" + datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+# Matriz de confusion
 
-tensorboard_callback = [
-    tf.keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=1),
-    keras.callbacks.ReduceLROnPlateau(monitor='val_loss', factor=0.1, patience=5, verbose=1, mode='auto', min_delta=0.0001, cooldown=0, min_lr=0)
-]
+from sklearn.metrics import confusion_matrix
+import seaborn as sns
 
-model.fit(train_dataset, validation_data=validation_dataset, epochs=1, callbacks=tensorboard_callback)
+cm = confusion_matrix(y_true, y_pred)
+plt.figure(figsize=(10, 10))
+sns.heatmap(cm, annot=True, fmt='d', xticklabels=generos, yticklabels=generos)
+plt.xlabel('Predecido')
+plt.ylabel('Verdadero')
+plt.show()
 
-# Guardar el modelo
-model.save('modelNewDataset.keras')
+# Precision, recall y f1-score
+
+from sklearn.metrics import classification_report
+
+print(classification_report(y_true, y_pred, target_names=generos))
+
+# Predecir
+import numpy as np
+from tensorflow.keras.preprocessing import image
+
+print("Prueba general")
+model.evaluate(test_dataset)
+
+# Recuperar un elemento aleatorio de cada genero
+print("Prueba Aleatorea")
+for g in generos:
+    files = glob.glob(f"{test_dir}/{g}/*.png")
+    img_path = random.choice(files)
+    img = image.load_img(img_path, target_size=(432, 288))
+    img_array = image.img_to_array(img)
+    img_array = tf.expand_dims(img_array, 0)
+
+    predictions = model.predict(img_array)
+    score = tf.nn.softmax(predictions[0])
+    print(score)
+
+    print("Esta imagen probablemente pertenece a {} con una confianza de {:.2f} por ciento. El verdadero valor es: {}."
+          .format(generos[np.argmax(score)], 100 * np.max(score), g))
+
+    plt.figure(figsize=(10, 10))
+    plt.imshow(img)
+    plt.axis('off')
+    plt.title(
+        "Esta imagen probablemente pertenece a {} con una confianza de {:.2f} por ciento. El verdadero valor es: {}."
+        .format(generos[np.argmax(score)], 100 * np.max(score), g)
+    )
+    plt.show()
+
+# Prueba individual:
+print("Prueba Individual")
+img_path = 'Thriller.png'
+img = image.load_img(img_path, target_size=(432, 288))
+img_array = image.img_to_array(img)
+img_array = tf.expand_dims(img_array, 0)
+
+predictions = model.predict(img_array)
+score = tf.nn.softmax(predictions[0])
+
+print(
+    "Esta imagen pertenece a {} con una confianza de {:.2f} por ciento."
+    .format(generos[np.argmax(score)], 100 * np.max(score))
+)
+
